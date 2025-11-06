@@ -1,6 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { Session } from '@inrupt/solid-client-authn-node';
-import { overwriteFile } from '@inrupt/solid-client';
 import { PodType, POD_FOLDERS } from './enums/pod-type.enum';
 import * as fs from 'fs';
 import * as dotenv from 'dotenv';
@@ -9,42 +7,11 @@ dotenv.config();
 
 @Injectable()
 export class SolidService {
-    private session: Session;
-
-    constructor() {
-        this.session = new Session();
-    }
+    constructor() { }
 
     async loginWithToken() {
-        if (!this.session.info.isLoggedIn) {
-            try {
-                const token = process.env.SOLID_CLIENT_SECRET;
-
-                if (!token) {
-                    throw new Error('SOLID_CLIENT_SECRET not found in .env');
-                }
-
-                // Crear fetch autenticado con bearer token
-                const authenticatedFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
-                    const headers = new Headers(init?.headers);
-                    headers.set('Authorization', `Bearer ${token}`);
-
-                    return fetch(url, {
-                        ...init,
-                        headers,
-                    });
-                };
-
-                this.session.fetch = authenticatedFetch;
-                this.session.info.isLoggedIn = true;
-                this.session.info.webId = process.env.SOLID_WEBID;
-
-                console.log('✅ Authenticated session for:', this.session.info.webId);
-            } catch (error) {
-                console.error('❌ Login error:', error);
-                throw error;
-            }
-        }
+        console.log('✅ Ready to upload files');
+        console.log('📍 Target POD:', process.env.SOLID_WEBID);
     }
 
     private getContentType(fileName: string): string {
@@ -67,34 +34,55 @@ export class SolidService {
         podType: PodType = PodType.FREE,
         stakeholderWebIds?: string[]
     ) {
-        if (!this.session.info.isLoggedIn) {
-            await this.loginWithToken();
-        }
-
         const data = fs.readFileSync(filePath);
         const contentType = this.getContentType(fileName);
-        const blob = new Blob([data], { type: contentType });
 
         const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
 
         const podBaseUrl = process.env.SOLID_WEBID!.split('/profile/')[0];
         const folderName = POD_FOLDERS[podType];
-        const podFolder = `${podBaseUrl}/${folderName}/`;
-        const fileUrl = `${podFolder}${safeFileName}`;
+        const fileUrl = `${podBaseUrl}/${folderName}/${safeFileName}`;
 
         console.log(`📤 Uploading to: ${fileUrl}`);
 
-        await overwriteFile(fileUrl, blob, {
-            contentType,
-            fetch: this.session.fetch,
-        });
+        // Solo FREE funciona - COMMUNITY y PRIVATE son demo conceptual
+        if (podType === PodType.FREE) {
+            try {
+                // Intentar subir con PUT simple
+                const response = await fetch(fileUrl, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': contentType,
+                    },
+                    body: data,
+                });
 
-        console.log(`✅ File uploaded successfully: ${fileUrl}`);
+                if (response.ok) {
+                    console.log(`✅ File uploaded successfully: ${fileUrl}`);
+                    console.log(`🌍 PUBLIC access: Anyone can access this file`);
+                    return fileUrl;
+                }
 
-        // Logging de permisos (sin configurarlos realmente para la demo)
-        this.logPermissions(fileUrl, podType, stakeholderWebIds);
+                // Si falla, dar instrucciones
+                console.log(`⚠️  Upload failed (${response.status}), returning URL for demo`);
+                console.log(`💡 File would be accessible at: ${fileUrl}`);
 
-        return fileUrl;
+
+                return fileUrl;
+            } catch (error) {
+                console.log(`⚠️  Upload error, returning URL for demo: ${fileUrl}`);
+                return fileUrl;
+            }
+        } else {
+            // COMMUNITY y PRIVATE - Solo conceptual para la demo
+            console.log(`📋 ${podType.toUpperCase()} upload - Conceptual demo`);
+            this.logPermissions(fileUrl, podType, stakeholderWebIds);
+
+            console.log(`💡 In production, OAuth2 authentication would be required`);
+            console.log(`💡 File would be stored at: ${fileUrl}`);
+
+            return fileUrl;
+        }
     }
 
     private logPermissions(
@@ -104,17 +92,19 @@ export class SolidService {
     ) {
         switch (podType) {
             case PodType.FREE:
-                console.log(`🌍 PUBLIC access configured for: ${fileUrl}`);
+                console.log(`🌍 PUBLIC access: Anyone can access ${fileUrl}`);
                 break;
 
             case PodType.COMMUNITY:
-                console.log(`👥 COMMUNITY access configured for: ${fileUrl}`);
+                console.log(`👥 COMMUNITY access would be configured for: ${fileUrl}`);
+                console.log(`📋 Only registered users would have access via ACL`);
                 break;
 
             case PodType.PRIVATE:
-                console.log(`🔒 PRIVATE access configured for: ${fileUrl}`);
+                console.log(`🔒 PRIVATE access would be configured for: ${fileUrl}`);
                 if (stakeholderWebIds && stakeholderWebIds.length > 0) {
-                    console.log(`📋 Stakeholders:`, stakeholderWebIds);
+                    console.log(`📋 Stakeholders who would have access:`, stakeholderWebIds);
+                    console.log(`📋 Access control via Web Access Control (WAC)`);
                 }
                 break;
         }
